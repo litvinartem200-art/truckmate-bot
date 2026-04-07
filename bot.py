@@ -2,21 +2,17 @@ import os, logging, aiohttp, re, openrouteservice
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Токены из Railway
 TOKEN   = os.environ.get("BOT_TOKEN", "")
 OCR_KEY = os.environ.get("OCR_KEY", "")
 ORS_KEY = os.environ.get("ORS_API_KEY", "")
 
-# Инициализация клиента для грузовых маршрутов
 ors_client = None
 if ORS_KEY:
     ors_client = openrouteservice.Client(key=ORS_KEY)
 
-# Справочники цен
 DIESEL = {
     "FR":1.65,"DE":1.71,"IT":1.95,"CH":1.89,"ES":1.55,"BE":1.68,
     "NL":2.05,"AT":1.68,"PL":1.41,"CZ":1.52,"SK":1.48,"HU":1.44,
@@ -107,7 +103,6 @@ def build_cost(km, cc1, cc2, weight, lang):
     tolls = round(km * max(TOLL_PER_100.get(cc1, 15), TOLL_PER_100.get(cc2, 15)) / 100)
     total = fuel_total + tolls
     if cc1 == "CH" or cc2 == "CH": total += 42
-    
     if lang == "ru": return f"Топливо: ~{fuel_total}€\nДороги: ~{tolls}€\n*ИТОГО: {total}€*"
     if lang == "fr": return f"Carburant: ~{fuel_total}€\nPéages: ~{tolls}€\n*TOTAL: {total}€*"
     return f"Fuel: ~{fuel_total}€\nTolls: ~{tolls}€\n*TOTAL: {total}€*"
@@ -141,32 +136,4 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if d.startswith("l_"):
         u["lang"] = d[2:]; await q.edit_message_text(T[u["lang"]]["menu"], reply_markup=kb_menu(uid))
     elif d == "m_lang": await q.edit_message_text("Язык / Langue:", reply_markup=kb_lang())
-    elif d == "back": await q.edit_message_text(T[u["lang"]]["menu"], reply_markup=kb_menu(uid))
-    elif d == "m_route":
-        u["step"] = "from"; await q.edit_message_text(T[u["lang"]]["ask_from"], reply_markup=kb_back(uid))
-    elif d.startswith("w_"):
-        weight = float(d[2:])
-        await q.edit_message_text(T[u["lang"]]["searching"])
-        lon1, lat1, cc1 = await geocode(u["from"])
-        lon2, lat2, cc2 = await geocode(u["to"])
-        km, dur = await get_truck_route(lon1, lat1, lon2, lat2)
-        if km:
-            res = build_cost(km, cc1, cc2, weight, u["lang"])
-            txt = f"🚛 *{u['from']} -> {u['to']}*\n📏 {km} km | ⏱ {dur}\n\n{res}"
-            await q.edit_message_text(txt, reply_markup=kb_back(uid), parse_mode="Markdown")
-        else:
-            await q.edit_message_text(T[u["lang"]]["not_found"], reply_markup=kb_back(uid))
-
-async def msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id; u = ud(uid); txt = update.message.text
-    if u.get("step") == "from":
-        u["from"] = txt; u["step"] = "to"; await update.message.reply_text(T[u["lang"]]["ask_to"])
-    elif u.get("step") == "to":
-        u["to"] = txt; u["step"] = ""; await update.message.reply_text(T[u["lang"]]["ask_w"], reply_markup=kb_w(uid))
-
-app = Application.builder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(button))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg))
-app.run_polling()
-        
+    elif d == "back": await q.edit_message_text(T[u["
