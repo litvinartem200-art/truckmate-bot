@@ -1,4 +1,3 @@
-# GidTrack
 import os, logging, aiohttp, re, openrouteservice
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
@@ -65,7 +64,7 @@ T = {
 "fr":{
   "welcome":"Bonjour! Choisi ta langue:","menu":"Menu GidTrack",
   "r_route":"Itinéraire LKW","r_fuel":"Prix diesel","r_border":"Frontières","r_rules":"Règles UE",
-  "r_company":"Entreprise","r_cmr":"Scan CMR","r_lang":"Langue","r_pro":"Pro","r_back":"Retour",
+  "r_company":"Entreprise","r_cmr":"Scan CMR","r_lang":"Langue","r_pro":"Abonnement Pro","r_back":"Retour",
   "ask_from":"Départ?","ask_to":"Arrivée?","ask_w":"Poids camion:",
   "w1":"7.5t","w2":"12t","w3":"20t","w4":"40t",
   "searching":"Calcul itinéraire camion...","not_found":"Non trouvé.",
@@ -170,3 +169,4 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg))
 app.run_polling()
+        
