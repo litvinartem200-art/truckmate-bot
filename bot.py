@@ -1,4 +1,4 @@
-import os, logging, aiohttp, re, asyncio
+importos, logging, aiohttp, re, asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
