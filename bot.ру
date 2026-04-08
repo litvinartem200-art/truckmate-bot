@@ -11,12 +11,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ---
+# ─── ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ───────────────────────────────────────────────────
 TOKEN   = os.environ.get("BOT_TOKEN", "")
 OCR_KEY = os.environ.get("OCR_KEY", "")
-ORS_KEY = os.environ.get("ORS_API_KEY", "")
+ORS_KEY = os.environ.get("ORS_API_KEY", "")   # openrouteservice.org — бесплатно 2000 запросов/день
 
-# --- СПРАВОЧНИКИ ---
+# ─── СПРАВОЧНИКИ ────────────────────────────────────────────────────────────
 DIESEL = {
     "FR":1.65,"DE":1.71,"IT":1.95,"CH":1.89,"ES":1.55,"BE":1.68,
     "NL":2.05,"AT":1.68,"PL":1.41,"CZ":1.52,"SK":1.48,"HU":1.44,
@@ -24,66 +24,195 @@ DIESEL = {
     "RS":1.38,"BA":1.35,"AL":1.50,"MK":1.40,"ME":1.45,"GR":1.78,
 }
 
-# --- ХРАНИЛИЩЕ ---
+# Стоимость платных дорог €/100км для грузовиков (зависит от осей/веса)
+TOLL = {
+    "FR":25.0,"DE":19.0,"IT":18.0,"ES":15.0,"AT":26.0,
+    "PL":12.0,"CZ":14.0,"HU":18.0,"BE":15.0,"SI":14.0,
+    "HR":16.0,"GR":10.0,"RO":8.0,"BG":6.0,"SK":10.0,
+}
+
+# Реальный расход дизеля л/100км по весу
+def get_consumption(w):
+    if w <= 7.5:  return 18.0
+    elif w <= 12: return 22.0
+    elif w <= 20: return 28.0
+    elif w <= 30: return 31.0
+    else:         return 34.0
+
+# ─── ХРАНИЛИЩЕ СОСТОЯНИЙ ────────────────────────────────────────────────────
 udata = {}
 
 def ud(uid):
     if uid not in udata:
-        udata[uid] = {"lang": "ru", "step": "", "from": "", "to": "", "weight": 20.0}
+        udata[uid] = {
+            "lang": "ru", "step": "",
+            "from": "", "to": "",
+            "from_lon": None, "from_lat": None, "from_cc": "",
+            "to_lon": None,   "to_lat": None,   "to_cc":   "",
+            "weight": 20.0,
+        }
     return udata[uid]
 
+# ─── ТЕКСТЫ (RU / UK / FR / EN) ─────────────────────────────────────────────
 T = {
-    "ru": {
-        "welcome": "Привет! Я *GidTrack*! Выбери язык:",
-        "menu": "Главное меню",
-        "r_route": "Маршрут LKW",
-        "r_fuel": "Цены на дизель",
-        "r_back": "Назад",
-        "ask_from": "Откуда едешь?",
-        "ask_to": "Куда едешь?",
-        "ask_w": "Вес грузовика:"
-    }
+"ru": {
+    "welcome":    "Привет! Я *GidTrack* — умный помощник дальнобойщика в Европе!\n\nПрокладываю грузовые маршруты, считаю топливо, дороги и границы.\n\nВыбери язык:",
+    "menu":       "Главное меню GidTrack",
+    "r_route":    "Маршрут LKW + стоимость",
+    "r_fuel":     "Цены на дизель",
+    "r_border":   "Документы на границу",
+    "r_rules":    "Правила ЕС (тахограф)",
+    "r_company":  "Найти фирму/адрес",
+    "r_cmr":      "Скан CMR документа",
+    "r_lang":     "Язык",
+    "r_pro":      "Pro подписка",
+    "r_back":     "Назад",
+    "ask_from":   "Откуда едешь?\n\nНапиши город отправления:\n_Примеры: Lyon, Berlin, Besancon, Warsaw_",
+    "ask_to":     "Куда едешь?\n\nНапиши город назначения:",
+    "ask_w":      "Полный вес грузовика:",
+    "w1":"до 7.5т", "w2":"7.5—12т", "w3":"12—20т", "w4":"20—40т",
+    "searching":  "Прокладываю грузовой маршрут...",
+    "not_found":  "Город не найден. Проверь название и попробуй ещё раз.\n\nПример: *Lyon*, *Milano*, *Berlin*",
+    "ask_co":     "Напиши название фирмы и город:\n_Пример: Lidl Lyon или Carrefour Besancon_",
+    "search_co":  "Ищу компанию...",
+    "ask_cmr":    "Отправь фото CMR накладной.\nЯ прочитаю адрес выгрузки и построю маршрут.",
+    "ocr_proc":   "Читаю документ...",
+    "ocr_nokey":  "OCR недоступен. Для активации добавь переменную OCR_KEY в Railway.",
+    "ors_nokey":  "ORS недоступен. Для грузовых маршрутов добавь ORS_API_KEY в Railway.\n\nИспользую стандартный маршрут OSRM.",
+    "fuel_prices": (
+        "Цены на дизель по Европе\n\n"
+        "Самые дешёвые:\n"
+        " Украина — 0.95/л\n"
+        " Болгария — 1.32/л\n"
+        " Румыния — 1.38/л\n"
+        " Польша — 1.41/л\n"
+        " Словакия — 1.48/л\n"
+        " Люксембург — 1.48/л\n\n"
+        "Средние:\n"
+        " Испания — 1.55/л\n"
+        " Хорватия — 1.42/л\n"
+        " Чехия — 1.52/л\n"
+        " Франция — 1.65/л\n"
+        " Австрия — 1.68/л\n"
+        " Германия — 1.71/л\n\n"
+        "Дорогие:\n"
+        " Швейцария — 1.89/л\n"
+        " Италия — 1.95/л\n"
+        " Нидерланды — 2.05/л\n\n"
+        "Совет: заправляйся в Польше, Словакии или Люксембурге — экономия до 80 на рейсе!"
+    ),
+    "rules_text": (
+        "Режим труда и отдыха ЕС (Рег. 561/2006)\n\n"
+        "Время вождения:\n"
+        "• За день: до 9 ч (2× в нед. можно 10 ч)\n"
+        "• За неделю: до 56 ч\n"
+        "• За 2 недели: до 90 ч\n\n"
+        "Обязательный отдых:\n"
+        "• После 4.5 ч езды — 45 мин перерыв\n"
+        "• Ежедневный отдых — 11 ч\n"
+        "• Еженедельный — 45 ч\n\n"
+        "Запреты движения по странам:\n"
+        "Франция: Пт 22:00 — Сб 22:00\n"
+        "Германия: Вс 00:00 — 22:00 + праздники\n"
+        "Италия: Сб 14:00 — Вс 22:00\n"
+        "Швейцария: Сб 15:00 — Вс 23:00\n"
+        "Австрия: Вс 00:00 — 22:00\n"
+        "Бельгия: Сб 22:00 — Вс 22:00"
+    ),
+    "b_ask":       "Выбери страну для документов:",
+    "pro_text":    "GidTrack Pro — 7€/месяц\n\nБесплатно:\n• 3 маршрута в месяц\n• Цены на дизель\n• Правила ЕС\n\nPro:\n• Неограниченные маршруты\n• Скан CMR\n• Стоянки TIR по маршруту\n• Документы для всех стран\n• Уведомления о запретах\n• Поддержка 24/7\n\nОформить: @gidtrack_support",
+},
+"uk": {
+    "welcome":    "Привіт! Я *GidTrack* — розумний помічник далекобійника!\n\nПрокладаю вантажні маршрути, рахую пальне і дороги.\n\nОбери мову:",
+    "menu":       "Головне меню GidTrack",
+    "r_route":    "Маршрут LKW + вартість",
+    "r_fuel":     "Ціни на дизель",
+    "r_border":   "Документи на кордон",
+    "r_rules":    "Правила ЄС (тахограф)",
+    "r_company":  "Знайти фірму/адресу",
+    "r_cmr":      "Скан CMR документу",
+    "r_lang":     "Мова",
+    "r_pro":      "Pro підписка",
+    "r_back":     "Назад",
+    "ask_from":   "Звідки їдеш?\n\nНапиши місто відправлення:\n_Приклади: Lyon, Berlin, Besancon_",
+    "ask_to":     "Куди їдеш?\n\nНапиши місто призначення:",
+    "ask_w":      "Повна вага вантажівки:",
+    "w1":"до 7.5т", "w2":"7.5—12т", "w3":"12—20т", "w4":"20—40т",
+    "searching":  "Прокладаю вантажний маршрут...",
+    "not_found":  "Місто не знайдено. Перевір назву і спробуй ще раз.",
+    "ask_co":     "Напиши назву фірми і місто:\n_Приклад: Lidl Lyon або Carrefour Besancon_",
+    "search_co":  "Шукаю компанію...",
+    "ask_cmr":    "Відправ фото CMR. Я прочитаю адресу вивантаження і побудую маршрут.",
+    "ocr_proc":   "Читаю документ...",
+    "ocr_nokey":  "OCR недоступний. Додай OCR_KEY у Railway.",
+    "ors_nokey":  "ORS недоступний. Додай ORS_API_KEY у Railway.",
+    "fuel_prices": "Ціни на дизель:\n\nДешево: Польща 1.41, Словаччина 1.48\nСередні: Франція 1.65, Австрія 1.68\nДорого: Швейцарія 1.89, Iталія 1.95",
+    "rules_text": "Правила ЄС: день до 9г, тиждень до 56г. Після 4.5г — 45хв перерва. Щодобовий відпочинок 11г.",
+    "b_ask":       "Обери країну:",
+    "pro_text":    "GidTrack Pro — 7€/місяць\n\nОформити: @gidtrack_support",
+},
+"fr": {
+    "welcome":    "Bonjour! Je suis *GidTrack* — ton assistant chauffeur en Europe!\n\nJe calcule les itinéraires poids lourds, carburant et péages.\n\nChoisis ta langue:",
+    "menu":       "Menu principal GidTrack",
+    "r_route":    "Itinéraire PL + coût",
+    "r_fuel":     "Prix diesel",
+    "r_border":   "Documents frontière",
+    "r_rules":    "Règles UE (tachygraphe)",
+    "r_company":  "Trouver une entreprise",
+    "r_cmr":      "Scanner CMR",
+    "r_lang":     "Langue",
+    "r_pro":      "Abonnement Pro",
+    "r_back":     "Retour",
+    "ask_from":   "Ville de départ?\n\nEcris la ville:\n_Exemples: Lyon, Berlin, Besancon_",
+    "ask_to":     "Ville d'arrivée?\n\nEcris la destination:",
+    "ask_w":      "Poids total du camion:",
+    "w1":"7.5t", "w2":"7.5—12t", "w3":"12—20t", "w4":"20—40t",
+    "searching":  "Calcul itinéraire poids lourd...",
+    "not_found":  "Ville non trouvée. Vérifie le nom et réessaie.",
+    "ask_co":     "Nom de l'entreprise et ville:\n_Exemple: Lidl Lyon ou Carrefour Besancon_",
+    "search_co":  "Recherche en cours...",
+    "ask_cmr":    "Envoie une photo de la CMR. Je lirai l'adresse de livraison.",
+    "ocr_proc":   "Lecture du document...",
+    "ocr_nokey":  "OCR indisponible. Ajoute OCR_KEY dans Railway.",
+    "ors_nokey":  "ORS indisponible. Ajoute ORS_API_KEY dans Railway.",
+    "fuel_prices": "Prix diesel en Europe:\n\nPas cher: Pologne 1.41, Slovaquie 1.48\nMoyens: France 1.65, Autriche 1.68\nCher: Suisse 1.89, Italie 1.95",
+    "rules_text": "Règles UE: jour max 9h, semaine max 56h. Pause après 4.5h - 45min.",
+    "b_ask":       "Choisis le pays:",
+    "pro_text":    "GidTrack Pro — 7€/mois\n\nAbonnement: @gidtrack_support",
+},
+"en": {
+    "welcome":    "Hi! I'm *GidTrack* — your smart truck driver assistant in Europe!\n\nI calculate HGV routes, fuel costs and tolls.\n\nChoose language:",
+    "menu":       "GidTrack Main Menu",
+    "r_route":    "HGV Route + cost",
+    "r_fuel":     "Diesel prices",
+    "r_border":   "Border documents",
+    "r_rules":    "EU rules (tachograph)",
+    "r_company":  "Find company/address",
+    "r_cmr":      "Scan CMR document",
+    "r_lang":     "Language",
+    "r_pro":      "Pro subscription",
+    "r_back":     "Back",
+    "ask_from":   "Where are you departing from?\n\nType the city:\n_Examples: Lyon, Berlin, Besancon_",
+    "ask_to":     "Where are you going?\n\nType destination city:",
+    "ask_w":      "Total truck weight:",
+    "w1":"7.5t", "w2":"7.5—12t", "w3":"12—20t", "w4":"20—40t",
+    "searching":  "Calculating HGV route...",
+    "not_found":  "City not found. Check the name and try again.",
+    "ask_co":     "Company name and city:\n_Example: Lidl Lyon or Carrefour Besancon_",
+    "search_co":  "Searching...",
+    "ask_cmr":    "Send a CMR photo. I'll read the delivery address.",
+    "ocr_proc":   "Reading document...",
+    "ocr_nokey":  "OCR unavailable. Add OCR_KEY to Railway.",
+    "ors_nokey":  "ORS unavailable. Add ORS_API_KEY to Railway.",
+    "fuel_prices": "Diesel prices in Europe:\n\nCheap: Poland 1.41, Slovakia 1.48\nAverage: France 1.65, Austria 1.68\nExpensive: Switzerland 1.89, Italy 1.95",
+    "rules_text": "EU rules: day max 9h, week max 56h. Break after 4.5h - 45min.",
+    "b_ask":       "Choose country:",
+    "pro_text":    "GidTrack Pro — 7€/month\n\nSubscribe: @gidtrack_support",
+},
 }
 
-async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    ud(uid)["step"] = ""
-    await update.message.reply_text(T["ru"]["welcome"], reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("Русский", callback_data="lang_ru")]
-    ]))
-
-async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uid = q.from_user.id
-    if q.data == "lang_ru":
-        await q.edit_message_text(T["ru"]["menu"], reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton(T["ru"]["r_route"], callback_data="m_route")]
-        ]))
-    elif q.data == "m_route":
-        ud(uid)["step"] = "from"
-        await q.edit_message_text(T["ru"]["ask_from"])
-
-async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    u = ud(uid)
-    if u["step"] == "from":
-        u["from"] = update.message.text
-        u["step"] = "to"
-        await update.message.reply_text(T["ru"]["ask_to"])
-    elif u["step"] == "to":
-        u["to"] = update.message.text
-        u["step"] = ""
-        await update.message.reply_text(f"Маршрут {u['from']} -> {u['to']} принят!")
-
-def main():
-    if not TOKEN: return
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(btn))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
-        
+# ─── ДОКУМЕНТЫ ДЛЯ ГРАНИЦ ───────────────────────────────────────────────────
+BORDER = {
+"CH": {
+    "ru": ("ШВЕЙЦАРИЯ — ДОКУМЕНТЫ\n\n"
+           "Обязательно:\n"
